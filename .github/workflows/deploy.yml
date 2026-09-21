@@ -1,0 +1,56 @@
+# Deploy the personal website to GitHub Pages from an AES-256-encrypted
+# package stored as a release asset on the private source repository.
+# No website files are stored in this repository.
+# Adapted from https://github.com/Phuker/phuker.github.io (GPL-3.0)
+
+name: Deploy to GitHub Pages
+
+on:
+    # Run manually: repo -> Actions tab -> Deploy to GitHub Pages -> Run workflow,
+    # or trigger via CLI: gh workflow run deploy.yml -R sammeng5232/sammeng5232.github.io
+    workflow_dispatch:
+
+permissions:
+    pages: write
+    id-token: write
+
+# Allow one concurrent deployment
+concurrency:
+    group: "pages"
+    cancel-in-progress: true
+
+jobs:
+    deploy:
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Download encrypted site package
+              env:
+                    GH_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+              run: |
+                    gh release download site-package \
+                        --repo sammeng5232/sammeng5232.github.io-src \
+                        --pattern 'site.tar.gz.enc' \
+                        --output /tmp/site.tar.gz.enc
+
+            - name: Decrypt and extract
+              shell: bash
+              env:
+                    REMOTE_FILE_PASSWORD: ${{ secrets.REMOTE_FILE_PASSWORD }}
+              run: |
+                    openssl enc -d -aes-256-cbc -pbkdf2 \
+                        -pass env:REMOTE_FILE_PASSWORD \
+                        -in /tmp/site.tar.gz.enc -out - \
+                        | tar -xzvf -
+                    rm -f /tmp/site.tar.gz.enc
+
+            - name: Upload artifact
+              uses: actions/upload-pages-artifact@v3
+              with:
+                    path: '.'
+
+            - name: Deploy to GitHub Pages
+              id: deployment
+              uses: actions/deploy-pages@v4
