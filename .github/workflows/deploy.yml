@@ -1,6 +1,7 @@
 # Deploy the personal website to GitHub Pages from an AES-256-encrypted
-# package stored as a release asset on the private source repository.
-# No website files are stored in this repository.
+# package stored as a release asset on this repository.
+# No readable website files are stored in this repository - the package is
+# opaque ciphertext without the encryption key (held only in Actions secrets).
 # Adapted from https://github.com/Phuker/phuker.github.io (GPL-3.0)
 
 name: Deploy to GitHub Pages
@@ -11,6 +12,7 @@ on:
     workflow_dispatch:
 
 permissions:
+    contents: read   # download the 'site-package' release asset from this repo
     pages: write
     id-token: write
 
@@ -28,10 +30,10 @@ jobs:
         steps:
             - name: Download encrypted site package
               env:
-                    GH_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+                    GH_TOKEN: ${{ github.token }}
               run: |
                     gh release download site-package \
-                        --repo sammeng5232/sammeng5232.github.io-src \
+                        --repo "$GITHUB_REPOSITORY" \
                         --pattern 'site.tar.gz.enc' \
                         --output /tmp/site.tar.gz.enc
 
