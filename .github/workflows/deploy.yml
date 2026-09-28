@@ -1,7 +1,9 @@
-# Deploy the personal website to GitHub Pages from an AES-256-encrypted
-# package stored as a release asset on this repository.
-# No readable website files are stored in this repository - the package is
-# opaque ciphertext without the encryption key (held only in Actions secrets).
+# Deploy the personal website to GitHub Pages from AES-256-encrypted files
+# stored as release assets on this repository.
+# No readable website files are stored in this repository - every asset is
+# opaque ciphertext without the encryption key (held only in Actions secrets),
+# named by a keyed hash of its content; an encrypted manifest maps the assets
+# to site paths. Paths are never printed, since failed runs' logs stay public.
 # Adapted from https://github.com/Phuker/phuker.github.io (GPL-3.0)
 
 name: Deploy to GitHub Pages
@@ -12,7 +14,7 @@ on:
     workflow_dispatch:
 
 permissions:
-    contents: read   # download the 'site-package' release asset from this repo
+    contents: read   # download the 'site-package' release assets from this repo
     pages: write
     id-token: write
 
@@ -28,25 +30,44 @@ jobs:
             url: ${{ steps.deployment.outputs.page_url }}
         runs-on: ubuntu-latest
         steps:
-            - name: Download encrypted site package
+            - name: Download encrypted site files
               env:
                     GH_TOKEN: ${{ github.token }}
               run: |
+                    mkdir -p /tmp/pkg
                     gh release download site-package \
                         --repo "$GITHUB_REPOSITORY" \
-                        --pattern 'site.tar.gz.enc' \
-                        --output /tmp/site.tar.gz.enc
+                        --pattern '*.enc' \
+                        --dir /tmp/pkg
 
-            - name: Decrypt and extract
+            - name: Decrypt
               shell: bash
               env:
                     REMOTE_FILE_PASSWORD: ${{ secrets.REMOTE_FILE_PASSWORD }}
               run: |
-                    openssl enc -d -aes-256-cbc -pbkdf2 \
-                        -pass env:REMOTE_FILE_PASSWORD \
-                        -in /tmp/site.tar.gz.enc -out - \
-                        | tar -xzvf -
-                    rm -f /tmp/site.tar.gz.enc
+                    set -euo pipefail
+                    dec() { openssl enc -d -aes-256-cbc -pbkdf2 -pass env:REMOTE_FILE_PASSWORD -in "$1" -out "$2"; }
+                    if [ -f /tmp/pkg/site.tar.gz.enc ] || [ ! -f /tmp/pkg/manifest.enc ]; then
+                        # old single archive: present only when it is the latest upload
+                        dec /tmp/pkg/site.tar.gz.enc - | tar -xzf -
+                    else
+                        dec /tmp/pkg/manifest.enc /tmp/manifest.tsv
+                        n=0
+                        while IFS=$'\t' read -r asset path || [ -n "$asset" ]; do
+                            case "/$path/" in
+                                //*|*/../*) echo "::error::unsafe path in the manifest"; exit 1 ;;
+                            esac
+                            case "$asset" in
+                                ''|*/*) echo "::error::bad asset name in the manifest"; exit 1 ;;
+                            esac
+                            mkdir -p -- "./$(dirname -- "$path")"
+                            dec "/tmp/pkg/$asset" "./$path"
+                            n=$((n + 1))
+                        done < /tmp/manifest.tsv
+                        [ "$n" -gt 0 ] || { echo "::error::empty manifest"; exit 1; }
+                        echo "decrypted $n files"
+                    fi
+                    rm -rf /tmp/pkg /tmp/manifest.tsv
 
             - name: Upload artifact
               uses: actions/upload-pages-artifact@v3
